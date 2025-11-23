@@ -75,7 +75,7 @@ def TokenCheck(walletPublicKey,api_key,mint,mint_amount):
             ]
           }
     
-         headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
     
         try:
             
@@ -120,15 +120,16 @@ def TokenCheck(walletPublicKey,api_key,mint,mint_amount):
 class VelcoityTuned401(BaseHTTPMiddleware):
 
 
-    def __init__(self, app, protected_paths:dict,required_mint:str,mint_amount:float,helius_api_key:str,secret_domain="VELOCITY",turn_on_one_time_access_per_wallet:bool):
+    def __init__(self, app, protected_paths:dict,required_mint:str,mint_amount:float,helius_api_key:str,secret_domain,turn_on_one_time_access_per_wallet:bool):
         super().__init__(app)
         self.protected_paths = protected_paths
         self.required_mint = required_mint
         self.mint_amount=mint_amount
         self.helius_api_key = helius_api_key
         self.secret_domain = secret_domain
-        self.turn_on_one_time_generation_per_wallet=turn_on_one_time_access_per_wallet
+        self.turn_on_one_time_access_per_wallet=turn_on_one_time_access_per_wallet
         self.gate_storage=   Cache(str(ROOT_CACHE_DIR / "gate"))
+        self.custom_storage = Cache(str(ROOT_CACHE_DIR / "custom"))
       
   
       
@@ -141,6 +142,15 @@ class VelcoityTuned401(BaseHTTPMiddleware):
   
 
     def checkGateStorage(self,wallet):
+        return wallet in self.custom_storage
+
+
+
+    def addtoCustomStorage(self,wallet):
+        self.custom_storage[wallet] = True
+
+
+    def checkCustomStorage(self,wallet):
         return wallet in self.custom_storage
 
 
@@ -213,14 +223,14 @@ class VelcoityTuned401(BaseHTTPMiddleware):
 
 
                         
-                      match REQUIRED_SERVICE:
+                    match REQUIRED_SERVICE:
 
 
                             case "gate":
 
 
 
-                                 if self.turn_on_one_time_generation_per_wallet==True:
+                                if self.turn_on_one_time_access_per_wallet==True:
                                   
                                     checkstatus=self.checkGateStorage(X_401_Addr)
                                     if checkstatus==True:
@@ -236,40 +246,62 @@ class VelcoityTuned401(BaseHTTPMiddleware):
 
                                 
                     
-                                 response = await call_next(request)
-                                 if response.headers.get("content-type") == "application/json":
+                                response = await call_next(request)
+                                if response.headers.get("content-type") == "application/json":
                             
-                                      body_bytes = b""
-                                      async for chunk in response.body_iterator:
+                                    body_bytes = b""
+                                    async for chunk in response.body_iterator:
                                           body_bytes += chunk
 
-                                      try:
+                                    try:
                                           data = json.loads(body_bytes.decode())
-                                      except json.JSONDecodeError:
+                                    except json.JSONDecodeError:
                                           return response
 
         
-                                 data["address"] = X_401_Addr
-                                 data["message"] = tokenverify["message"]
+                                    data["address"] = X_401_Addr
+                                    data["message"] = tokenverify["message"]
         
-                                 response_headers = dict(response.headers)
-                                 response_headers.pop("content-length", None)
-                                 print(data) 
+                                    response_headers = dict(response.headers)
+                                    response_headers.pop("content-length", None)
+                                    print(data) 
                                     
-                                 self.addtoGateStorage(X_401_Addr)
+                                    self.addtoGateStorage(X_401_Addr)
 
-                                 return JSONResponse(
+                                    return JSONResponse(
                                         content=data,
                                         status_code=response.status_code,
                                         headers=response_headers
                                       ) 
+                                
+                                return response
+                         
+
+                            case "custom":
+                              
+                                if self.turn_off_one_time_access_per_wallet==False:
+                                  
+                                    checkstatus=self.checkCustomStorage(X_401_Addr)
+                                    if checkstatus==True:
+
+                                        return JSONResponse(
+                                            content={"status": "error", "message": f"access already granted for {X_401_Addr}"},
+                                            headers= {
+                                                "Access-Control-Allow-Origin": "*",
+                                                "Access-Control-Allow-Credentials": "true"
+                                            },
+                                            status_code=401
+                                            )
+                                
+                                self.addtoCustomStorage(X_401_Addr)
+                                response = await call_next(request)
                                 return response
                                                     
 
             elif tokenverify==False:
                         return JSONResponse(
                             content={"status": "error", "message": tokenverify["message"]},
-                            status_code=500,
+                            status_code=401,
                             headers={
                                    "Access-Control-Allow-Origin": "*",
                                 "Access-Control-Allow-Credentials": "true"
@@ -288,21 +320,11 @@ class VelcoityTuned401(BaseHTTPMiddleware):
                             }
                         )
             
-
-
             else:
-                      return JSONResponse(
+                    return JSONResponse(
                             content={"status": "error", "message": "Authentication failed"},
                             status_code=401,
                             headers={
                                 "Access-Control-Allow-Origin": "*",
                                 "Access-Control-Allow-Credentials": "true"
-                            })
-
-
-
-
-
-
-
-                
+                    })
