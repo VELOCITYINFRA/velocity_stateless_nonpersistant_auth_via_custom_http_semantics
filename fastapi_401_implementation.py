@@ -1,5 +1,5 @@
 '''
-early implementation for velocity  tuned 401 with per route service customization and optional  one time access logic 
+Early implementation for velocity  tuned 401 with PER  ROUTE LOGIC CUSTOMIZATION with GEOBLOCKING  and optional  ONE TIME ACCESS LOGIC
 
 
 More Features under Implementation
@@ -10,7 +10,6 @@ Author VELOCITYINFRA
 v 0.0.1
 
 '''
-
 
 
 
@@ -28,13 +27,15 @@ import httpx
 from diskcache import Cache
 from pathlib import Path
 import jwt
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderServiceError
 
 
 
 
 
 ROOT_CACHE_DIR = Path(__file__).parent / ".x401_middleware_data"
-
+geolocator = Nominatim(user_agent="velocity")
 
 
 def SignatureVerification(X_401_Addr,X_401_Nonce,X_401_Sign,challange):
@@ -139,12 +140,69 @@ def generateJWT(wallet, tokenname,scopes):
 
 
 
+def GEOCODER(coords):
+
+
+    try:
+        location = geolocator.reverse(f"{coords.get("latitude")}, {coords.get("longitude"}", exactly_one=True)
+    
+    
+        if location and 'address' in location.raw:
+            country_name = location.raw['address'].get('country')
+            country_code = location.raw['address'].get('country_code')
+        
+            print(f"Latitude: {coords.get("latitude")}, Longitude: {coords.get("longitude")}")
+            print(f"Country Name: {country_name}")
+            print(f"Country Code: {country_code.upper() if country_code else 'N/A'}")
+                    
+            return {
+                        
+                "message": f"access denied for {country_name}",
+                "data": {
+                    "country": country_name,
+                    "code": country_code.upper() if country_code else None
+                }
+            }
+
+        else:
+                    
+            return {
+               "message": "Location could not be resolved.",
+               "data": None
+            }
+
+    except GeocoderServiceError as e:
+                
+            return {
+            "message": f"Geocoding service error: {str(e)}",
+            "data": None
+        }
+    except Exception as e:
+                
+         print(f"An unexpected error occurred: {e}")
+         return {
+            "message": f"Unexpected error: {str(e)}",
+            "data": None
+        }
+
+
 
 
 class VelcoityTuned401(BaseHTTPMiddleware):
 
 
-    def __init__(self, app, protected_paths:dict,required_mint:str,mint_amount:float,helius_api_key:str,secret_domain,turn_on_one_time_access_per_wallet:bool,options={}):
+    def __init__(
+                 self,app,
+                 protected_paths:dict,
+                 required_mint:str,
+                 mint_amount:float,
+                 helius_api_key:str,
+                 secret_domain:str,
+                 turn_on_one_time_access_per_wallet:bool,
+                 geo_closure=bool,
+                 geo_closure_locs:list,
+                 options={}
+                ):
         super().__init__(app)
         self.protected_paths = protected_paths
         self.required_mint = required_mint
@@ -152,10 +210,12 @@ class VelcoityTuned401(BaseHTTPMiddleware):
         self.helius_api_key = helius_api_key
         self.secret_domain = secret_domain
         self.turn_on_one_time_access_per_wallet=turn_on_one_time_access_per_wallet
+        self.geo_closure=geo_closure
+        self.geo_closure_locs=geo_closure_locs                    
         self.options=options
-        self.gate_storage=   Cache(str(ROOT_CACHE_DIR / "gate"))
+        self.gate_storage= Cache(str(ROOT_CACHE_DIR / "gate"))
         self.custom_storage = Cache(str(ROOT_CACHE_DIR / "custom"))
-        self.jwt_storage=Cache(str(ROOT_CACHE_DIR/"jwt"))
+        self.jwt_storage = Cache(str(ROOT_CACHE_DIR/"jwt"))
                 
       
   
@@ -198,7 +258,10 @@ class VelcoityTuned401(BaseHTTPMiddleware):
             if request.method == "OPTIONS":
                 return await call_next(request)
             
-            if not any(request.url.path.startswith(p) for p in self.protected_paths):
+
+
+
+            if not any(request.url.path.startswith(p) for p in self.protected_paths.keys()):
                 return await call_next(request)
         
 
@@ -208,6 +271,14 @@ class VelcoityTuned401(BaseHTTPMiddleware):
             X_401_Nonce=request.headers.get("X-401-Nonce")
             X_401_Sign=request.headers.get("X-401-Signature")
             X_401_Addr=request.headers.get("X-401-Addr")
+            lat=request.headers.get("X-Lat")
+            long=request.headers.get("X-Long")
+            coords={
+                                 
+                  "latitude":lat,
+                   "longitude":long
+                        
+            }
 
 
           
@@ -252,8 +323,11 @@ class VelcoityTuned401(BaseHTTPMiddleware):
 
             signverify=SignatureVerification(X_401_Addr,X_401_Nonce,X_401_Sign,challange)
             tokenverify=TokenCheck(X_401_Addr,self.helius_api_key,self.required_mint,self.mint_amount)
+                
             
-
+            
+                
+            
             if signverify == True and tokenverify["status"] == True:
 
 
@@ -264,8 +338,35 @@ class VelcoityTuned401(BaseHTTPMiddleware):
 
                             case "gate":
 
-
-
+                                '--------------------------- TEST IMPLEMENTATION --------------------------------'
+                                if self.geo_closure==True:
+                                            
+                                    geocoding_data=GEOCODER(coords)
+                                    if geocoding_data["data"] is None:
+                                           return JSONResponse(
+                                               content={"status": "error", "message": geocoding_data["message"]},
+                                               headers= {
+                                                   "Access-Control-Allow-Origin": "*",
+                                                  "Access-Control-Allow-Credentials": "true"
+                                                },status_code=500
+                                           )
+                                    elif geocoding_data["data"]["code"] in self.geo_closure_locs:
+                                                
+                                           return JSONResponse(
+                                               content={"status": "error", "message": geocoding_data["message"]},
+                                               headers= {
+                                                   "Access-Control-Allow-Origin": "*",
+                                                  "Access-Control-Allow-Credentials": "true"
+                                                },status_code=401
+                                           )
+                                                
+                                                
+                                    '-------------------------- TEST IMPLEMENTATION ----------------------------------------------'
+                                                
+                                            
+                                    
+                                            
+                                            
                                 if self.turn_on_one_time_access_per_wallet==True:
                                   
                                     checkstatus=self.checkGateStorage(X_401_Addr)
@@ -314,9 +415,31 @@ class VelcoityTuned401(BaseHTTPMiddleware):
                          
 
                              case "custom":
+
+
+
+                                 if self.geo_closure==True:
+                                    geocoding_data=GEOCODER(coords)
+                                    if geocoding_data["data"] is None:
+                                           return JSONResponse(
+                                               content={"status": "error", "message": geocoding_data["message"]},
+                                               headers= {
+                                                   "Access-Control-Allow-Origin": "*",
+                                                  "Access-Control-Allow-Credentials": "true"
+                                                },status_code=500
+                                           )
+                                    elif geocoding_data["data"]["code"] in self.geo_closure_locs:
+                                                
+                                           return JSONResponse(
+                                               content={"status": "error", "message": geocoding_data["message"]},
+                                               headers= {
+                                                   "Access-Control-Allow-Origin": "*",
+                                                  "Access-Control-Allow-Credentials": "true"
+                                                },status_code=401
+                                           )
                               
-                                if self.turn_on_one_time_access_per_wallet==True:
-                                  
+                                 if self.turn_on_one_time_access_per_wallet==True:
+                                   
                                                 checkstatus=self.checkCustomStorage(X_401_Addr)
                                                 if checkstatus==True:
 
@@ -334,32 +457,58 @@ class VelcoityTuned401(BaseHTTPMiddleware):
                                  return response
 
                              case "jwt":
+
+                                   if self.geo_closure==True:
+                        
+                                        geocoding_data=GEOCODER(coords)
+                                        if geocoding_data["data"] is None:
+                                                    
+                                           return JSONResponse(
+                                               content={"status": "error", "message": geocoding_data["message"]},
+                                               headers= {
+                                                   "Access-Control-Allow-Origin": "*",
+                                                  "Access-Control-Allow-Credentials": "true"
+                                                },status_code=500
+                                           )
+                                         elif geocoding_data["data"]["code"] in self.geo_closure_locs:
+                                                
+                                           return JSONResponse(
+                                               content={"status": "error", "message": geocoding_data["message"]},
+                                               headers= {
+                                                   "Access-Control-Allow-Origin": "*",
+                                                  "Access-Control-Allow-Credentials": "true"
+                                                },status_code=401
+                                           )
+                                                     
                                    if self.turn_on_one_time_access_per_wallet==True:
                                   
-                                    checkstatus=self.checkJWTStorage(X_401_Addr)
-                                    if checkstatus==True:
+                                                checkstatus=self.checkJWTStorage(X_401_Addr)
+                                                if checkstatus==True:
 
-                                        return JSONResponse(
-                                            content={"status": "error", "message": f"one time access already granted for {X_401_Addr}"},
-                                            headers= {
-                                                "Access-Control-Allow-Origin": "*",
-                                                "Access-Control-Allow-Credentials": "true"
-                                            },
-                                            status_code=500
-                                            )  
+                                                    return JSONResponse(
+                                                        content={"status": "error", "message": f"one time access already granted for {X_401_Addr}"},
+                                                        headers= {
+                                                            "Access-Control-Allow-Origin": "*",
+                                                            "Access-Control-Allow-Credentials": "true"
+                                                        },
+                                                        status_code=401
+                                                        )  
 
                                     jwt_token = generateJWT(X_401_Addr,"jwtaccesstoken",self.options.get("context", {}).get("scopes"))
                                     self.addtoJWTStorage(X_401_Addr)
                                     if jwt_token is None:
 
-                                          return JSONResponse(
-                                             content={"status": "error", "message": f"Failed to create token "},
-                                             headers={
-                                               "Access-Control-Allow-Origin": "*",
-                                               "Access-Control-Allow-Credentials": "true"
-                                         },
-                                        status_code=500
-                                         )
+                                                return JSONResponse(
+                                                         content={"status": "error", "message": f"Failed to create token "},
+                                                         headers={
+                                                           "Access-Control-Allow-Origin": "*",
+                                                           "Access-Control-Allow-Credentials": "true"
+                                                                 },
+                                                        status_code=500
+                                                                 )
+
+
+                                    response = await call_next(request)
 
                                     if response.headers.get("content-type") == "application/json":
         
